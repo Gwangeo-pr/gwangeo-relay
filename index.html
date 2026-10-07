@@ -104,6 +104,16 @@ button:disabled{opacity:.45}
 .att .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .att button{border:0;background:none;padding:0 2px;color:inherit}
 
+.chathead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}
+.ctitle{font-weight:800;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.clist{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:10px;max-height:55vh;overflow:auto}
+.citem{display:flex;align-items:center;gap:8px;padding:11px 12px;border-bottom:1px solid var(--line)}
+.citem:last-child{border-bottom:0}
+.citem.cur{background:var(--accent-soft)}
+.citem .ct{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.citem .cm{font-size:12px;color:var(--muted);white-space:nowrap}
+.citem button{padding:4px 9px;font-size:12px}
+.clist .none{padding:14px;color:var(--muted);font-size:13px;text-align:center}
 /* 하단 입력창 */
 .composer{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);
   padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));z-index:10}
@@ -148,6 +158,11 @@ a{color:var(--accent)}
 
   <!-- Gemini -->
   <section id="v-chat" hidden>
+    <div class="chathead">
+      <div class="ctitle" id="chatTitle">새 대화</div>
+      <div class="row"><button id="listBtn">대화 목록</button><button id="newChatBtn">새 대화</button></div>
+    </div>
+    <div class="clist" id="chatList" hidden></div>
     <div class="chat" id="chat"></div>
   </section>
 
@@ -197,7 +212,7 @@ a{color:var(--accent)}
 
     <div class="panel">
       <label class="t">작업 기록 정리</label>
-      <div class="row"><button class="danger" id="resetJob">현재 작업 기록 지우기</button><button class="danger" id="resetChat">Gemini 대화 지우기</button></div>
+      <div class="row"><button class="danger" id="resetJob">현재 작업 기록 지우기</button><button class="danger" id="resetChat">지금 Gemini 대화 삭제</button></div>
       <div class="hint" style="margin-top:6px">GitHub의 브랜치·PR은 지워지지 않아요.</div>
     </div>
   </section>
@@ -234,8 +249,52 @@ const store = {
   set(k, v){ try{ localStorage.setItem('relay.' + k, JSON.stringify(v)); }catch(e){} },
 };
 let cfg = Object.assign({gemKey:'', model:'gemini-flash-latest', ghToken:'', repo:'Gwangeo-pr/gwangeo-app', rounds:2, waitMin:40}, store.get('cfg', {}));
-let chat = store.get('chat', []);          // [{role:'user'|'model'|'error', text, files:[{name,mime,size}]}]
-let chatFiles = {};                         // 메모리에만: index -> [{name,mime,data(base64),url}]
+// 대화 목록: 대화 내용은 localStorage, 첨부파일은 IndexedDB (용량이 커서)
+let chats = store.get('chats', null);
+if(!chats){ const old = store.get('chat', []); chats = old.length ? [{id: rid(), title:'', updated: Date.now(), msgs: old}] : []; }
+let curChatId = store.get('curChat', chats.length ? chats[0].id : '') || '';
+let chat = ((chats.find(c => c.id === curChatId)) || {msgs: []}).msgs;   // [{role, text, files:[{name,mime,size}]}]
+let chatFiles = {};                         // index -> [{name,mime,data(base64),url}]
+function chatTitleOf(msgs){ const u = msgs.find(m => m.role === 'user'); return u ? (u.text.replace(/\s+/g,' ').slice(0, 36) || '첨부 파일') : '새 대화'; }
+function saveChat(){
+  if(!chat.length) return;
+  if(!curChatId) curChatId = rid();
+  let c = chats.find(x => x.id === curChatId);
+  if(!c){ c = {id: curChatId}; chats.unshift(c); }
+  c.msgs = chat; c.title = chatTitleOf(chat); c.updated = Date.now();
+  chats.sort((a, b) => b.updated - a.updated);
+  if(chats.length > 60){ chats.slice(60).forEach(x => idbDelChat(x.id)); chats = chats.slice(0, 60); }
+  store.set('chats', chats); store.set('curChat', curChatId);
+}
+// ---- IndexedDB (첨부파일 보관) ----
+let idbP = null;
+function idb(){
+  if(!idbP) idbP = new Promise((res) => { try{ const r = indexedDB.open('relay-files', 1); r.onupgradeneeded = () => r.result.createObjectStore('f'); r.onsuccess = () => res(r.result); r.onerror = () => res(null); }catch(e){ res(null); } });
+  return idbP;
+}
+async function idbTx(mode, fn){ const db = await idb(); if(!db) return null; return new Promise(res => { try{ const t = db.transaction('f', mode); const st = t.objectStore('f'); const out = fn(st); t.oncomplete = () => res(out && out.result); t.onerror = () => res(null); }catch(e){ res(null); } }); }
+const idbPut = (k, v) => idbTx('readwrite', st => st.put(v, k));
+const idbGet = k => idbTx('readonly', st => st.get(k));
+async function idbDelChat(id){ const db = await idb(); if(!db) return; try{ const t = db.transaction('f','readwrite'); t.objectStore('f').delete(IDBKeyRange.bound(id + ':', id + ':\uffff')); }catch(e){} }
+function b64ToURL(f){ try{ const bin = atob(f.data); const u = new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u[i] = bin.charCodeAt(i); return URL.createObjectURL(new Blob([u], {type: f.mime})); }catch(e){ return ''; } }
+async function loadChatFiles(){
+  chatFiles = {};
+  const id = curChatId;
+  for(let i = 0; i < chat.length; i++){
+    if(chat[i].files && chat[i].files.length){
+      const fs = await idbGet(id + ':' + i);
+      if(id !== curChatId) return;
+      if(fs) chatFiles[i] = fs.map(f => Object.assign({}, f, {url: /^image\//.test(f.mime) ? b64ToURL(f) : ''}));
+    }
+  }
+  renderChat();
+}
+function openChat(id){
+  const c = chats.find(x => x.id === id); if(!c) return;
+  curChatId = id; chat = c.msgs; store.set('curChat', id);
+  seen = chat.length; useChat = false; renderChat(); loadChatFiles();
+}
+function newChat(){ curChatId = ''; chat = []; chatFiles = {}; seen = 0; useChat = false; store.set('curChat', ''); renderChat(); updateComposer(); }
 let job = store.get('job', null);
 let tab = 'work', useChat = false, pending = [], busyChat = false, seen = chat.length;
 
@@ -588,6 +647,7 @@ function renderStatus(){
 
 function renderChat(){
   const el = $('#chat');
+  $('#chatTitle').textContent = chatTitleOf(chat);
   if(!chat.length){ el.innerHTML = `<div class="empty">사진·캡처·PDF·영상을 📎로 첨부하고 하고 싶은 걸 말해보세요.<br>"적용해줘", "만들어줘"처럼 작업을 요청하면 Gemini가 분석 내용을 알려준 뒤 <b>Claude에게 자동으로 넘겨요.</b> 질문만 하면 답만 해요.</div>`; }
   else el.innerHTML = chat.map((m, i) => {
     const fl = (chatFiles[i] || []);
@@ -628,6 +688,34 @@ function setTab(t){
 }
 document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
 
+// ---------------- 대화 목록 ----------------
+function fmtWhen(ms){
+  const d = new Date(ms), now = new Date(), hm = d.toTimeString().slice(0,5);
+  if(d.toDateString() === now.toDateString()) return '오늘 ' + hm;
+  const y = new Date(now); y.setDate(now.getDate() - 1);
+  if(d.toDateString() === y.toDateString()) return '어제 ' + hm;
+  return (d.getMonth()+1) + '/' + d.getDate() + ' ' + hm;
+}
+let armedDel = '';
+function renderList(){
+  $('#chatList').innerHTML = chats.length ? chats.map(c => `<div class="citem ${c.id === curChatId ? 'cur' : ''}" data-id="${esc(c.id)}"><span class="ct">${esc(c.title || '새 대화')}</span><span class="cm">${fmtWhen(c.updated)}</span><button class="danger" data-del="${esc(c.id)}">${armedDel === c.id ? '정말 삭제' : '삭제'}</button></div>`).join('')
+    : '<div class="none">저장된 대화가 없어요. 질문을 보내면 자동으로 저장돼요.</div>';
+}
+$('#listBtn').onclick = () => { const el = $('#chatList'); el.hidden = !el.hidden; armedDel = ''; if(!el.hidden) renderList(); };
+$('#newChatBtn').onclick = () => { if(busyChat) return; $('#chatList').hidden = true; newChat(); };
+$('#chatList').onclick = e => {
+  const del = e.target.closest('button[data-del]');
+  if(del){
+    if(armedDel !== del.dataset.del){ armedDel = del.dataset.del; return renderList(); }
+    const id = del.dataset.del; armedDel = '';
+    chats = chats.filter(c => c.id !== id); idbDelChat(id); store.set('chats', chats);
+    if(id === curChatId) newChat();
+    return renderList();
+  }
+  const it = e.target.closest('.citem'); if(!it || busyChat) return;
+  $('#chatList').hidden = true; openChat(it.dataset.id);
+};
+
 // ---------------- 첨부 ----------------
 function renderPending(){
   $('#pending').innerHTML = pending.map((f, i) => `<span class="att">${f.url && /^image\//.test(f.mime) ? `<img src="${f.url}" alt="">` : `<span class="ico">${/^video/.test(f.mime) ? '영상' : 'FILE'}</span>`}<span class="nm">${esc(f.name)}</span><button data-rm="${i}" aria-label="빼기">✕</button></span>`).join('');
@@ -661,7 +749,7 @@ async function runChat(){
     chat.push({role:'model', text: ans});
     if(wantsWork) handoffToClaude();
   }catch(e){ chat.push({role:'error', text: e.message}); }
-  busyChat = false; store.set('chat', chat); renderChat(); updateComposer();
+  busyChat = false; saveChat(); renderChat(); updateComposer();
 }
 // Gemini가 작업 요청을 알아채면 분석 내용 그대로 Claude에게 자동으로 넘김
 function handoffToClaude(){
@@ -679,7 +767,8 @@ async function askGemini(text){
   const idx = chat.length;
   chat.push({role:'user', text: text || '첨부한 파일을 봐줘.', files: files.map(f => ({name:f.name, mime:f.mime, size:f.size}))});
   chatFiles[idx] = files;
-  store.set('chat', chat);
+  if(files.length){ if(!curChatId) curChatId = rid(); idbPut(curChatId + ':' + idx, files.map(f => ({name:f.name, mime:f.mime, size:f.size, data:f.data}))); }
+  saveChat();
   await runChat();
 }
 
@@ -727,10 +816,10 @@ $('#copyRoutine').onclick = async () => {
   catch(e){ const r = document.createRange(); r.selectNodeContents($('#routinePrompt')); const s = getSelection(); s.removeAllRanges(); s.addRange(r); $('#copyMsg').textContent = '선택됐어요. 복사를 눌러주세요'; }
 };
 $('#resetJob').onclick = () => { if(running) return; job = null; store.set('job', null); sig = ''; render(); setTab('work'); };
-$('#resetChat').onclick = () => { chat = []; chatFiles = {}; seen = 0; useChat = false; store.set('chat', chat); renderChat(); };
+$('#resetChat').onclick = () => { if(curChatId){ chats = chats.filter(c => c.id !== curChatId); idbDelChat(curChatId); store.set('chats', chats); } newChat(); };
 
 // ---------------- 시작 ----------------
-loadSet(); renderChat(); render();
+loadSet(); renderChat(); render(); loadChatFiles();
 setInterval(tick, 1000);
 // 아이폰이 탭을 닫았다 다시 열어도 이어서 진행
 if(job && ['brief','dispatch','wait','review'].includes(job.phase)) drive([]).catch(fatal);
