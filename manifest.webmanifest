@@ -1,0 +1,18 @@
+{
+  "name": "광어 중계기",
+  "short_name": "광어 중계기",
+  "description": "Gemini가 지시·검토하고 Claude Code가 코딩하는 광어 작업 도구",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#121417",
+  "theme_color": "#14161a",
+  "lang": "ko",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

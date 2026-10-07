@@ -7,6 +7,9 @@
 <meta name="apple-mobile-web-app-title" content="광어 중계기">
 <meta name="theme-color" content="#14161a">
 <title>광어 중계기</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <style>
 /* 모바일 한 손 조작: 상단 탭 + 카드형 타임라인 + 하단 고정 입력창 */
 :root{
@@ -58,6 +61,8 @@ button:disabled{opacity:.45}
 .chip{font-size:12px;padding:3px 9px;border-radius:999px;background:var(--sys-soft);color:var(--muted)}
 .chip.ok{color:var(--ok)} .chip.bad{color:var(--err)}
 
+/* 폴드 펼친 화면·태블릿: 조금 더 넓게 */
+@media (min-width: 840px){ .wrap, .composer .in{max-width:920px} }
 /* 상태 띠 */
 .banner{border-radius:14px;padding:12px 14px;margin-bottom:12px;border:1px solid var(--line);background:var(--panel)}
 .banner .m{font-weight:800}
@@ -817,6 +822,9 @@ $('#copyRoutine').onclick = async () => {
 };
 $('#resetJob').onclick = () => { if(running) return; job = null; store.set('job', null); sig = ''; render(); setTab('work'); };
 $('#resetChat').onclick = () => { if(curChatId){ chats = chats.filter(c => c.id !== curChatId); idbDelChat(curChatId); store.set('chats', chats); } newChat(); };
+
+// ---------------- 앱 설치 (안드로이드 Chrome·삼성 인터넷: 홈 화면에 앱으로 설치) ----------------
+if('serviceWorker' in navigator){ window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {})); }
 
 // ---------------- 시작 ----------------
 loadSet(); renderChat(); render(); loadChatFiles();
