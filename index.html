@@ -260,21 +260,59 @@ function rid(){ return Date.now().toString(36) + Math.random().toString(36).slic
 function slug(s){ return (s||'task').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,24) || 'task'; }
 
 // ---------------- Gemini ----------------
-async function gemini(system, contents){
+// 붐빔(503)·일시 오류·사용량 초과(429)면 잠시 뒤 다시, 그래도 안 되면 다른 모델로. 요청 하나는 최대 3분.
+const GEM_FALLBACKS = ['gemini-flash-latest', 'gemini-2.5-flash', 'gemini-flash-lite-latest'];
+let gemAbort = null;   // 중지 버튼용
+async function gemini(system, contents, progress){
   if(!cfg.gemKey) throw new Error('설정에서 Gemini API 키를 먼저 넣어주세요.');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cfg.model)}:generateContent`;
-  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json','x-goog-api-key':cfg.gemKey},
-    body: JSON.stringify({systemInstruction:{parts:[{text:system}]}, contents})});
-  const j = await r.json().catch(() => ({}));
-  if(!r.ok){
-    const m = (j.error && j.error.message) || ('HTTP ' + r.status);
-    if(r.status === 429) throw new Error('Gemini 무료 사용량을 잠시 넘었어요. 1~2분 뒤 다시 해주세요.\n(' + m + ')');
-    throw new Error('Gemini 오류: ' + m);
-  }
-  const parts = (((j.candidates||[])[0]||{}).content||{}).parts || [];
-  const text = parts.map(p => p.text || '').join('').trim();
-  if(!text) throw new Error('Gemini가 빈 답을 보냈어요. (' + ((j.candidates||[])[0]||{}).finishReason + ')');
-  return text;
+  const first = /^gemini/i.test(cfg.model || '') ? cfg.model : 'gemini-flash-latest';
+  const models = [first, ...GEM_FALLBACKS.filter(m => m !== first)];
+  const outer = new AbortController(); gemAbort = outer;
+  const deadline = Date.now() + 8 * 60000;
+  let lastErr = null;
+  try{
+    for(const m of models){
+      for(let t = 0; t < 3; t++){
+        if(outer.signal.aborted) throw new Error('중지했어요');
+        if(Date.now() > deadline) throw new Error('Gemini가 8분 넘게 답하지 않아 멈췄어요. 잠시 뒤 다시 해주세요.');
+        if(progress) progress(m === first && t === 0 ? `Gemini(${m})에 요청 중…` : `Gemini가 붐벼서 다시 시도 중… (${m}, ${t+1}번째)`);
+        const res = await geminiOnce(m, system, contents, outer.signal);
+        if(res.ok) return res.text;
+        lastErr = res.err;
+        if(!res.retry) throw res.err;
+        if(t < 2) await sleepAbort((2 + t * 4) * 1000, outer.signal);
+      }
+    }
+    throw new Error('Gemini가 지금 많이 붐벼요. 여러 모델로 다시 시도했지만 실패했어요. 1~2분 뒤 다시 해주세요.\n(' + (lastErr && lastErr.message) + ')');
+  }finally{ if(gemAbort === outer) gemAbort = null; }
+}
+function sleepAbort(ms, signal){ return new Promise(res => { const t = setTimeout(res, ms); signal.addEventListener('abort', () => { clearTimeout(t); res(); }, {once:true}); }); }
+async function geminiOnce(model, system, contents, outerSignal){
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort('timeout'), 3 * 60000);
+  const onOuter = () => ac.abort('stop'); outerSignal.addEventListener('abort', onOuter, {once:true});
+  try{
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+    let r;
+    try{
+      r = await fetch(url, {method:'POST', signal: ac.signal, headers:{'Content-Type':'application/json','x-goog-api-key':cfg.gemKey},
+        body: JSON.stringify({systemInstruction:{parts:[{text:system}]}, contents})});
+    }catch(e){
+      if(outerSignal.aborted) return {ok:false, retry:false, err:new Error('중지했어요')};
+      return {ok:false, retry:true, err:new Error(ac.signal.aborted ? 'Gemini가 3분 넘게 답하지 않았어요' : 'Gemini에 연결하지 못했어요: ' + e.message)};
+    }
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){
+      const m = (j.error && j.error.message) || ('HTTP ' + r.status);
+      const retry = [429, 500, 503, 504].includes(r.status) || (r.status === 404 && model !== 'gemini-flash-latest');
+      if(r.status === 400 && /api key/i.test(m)) return {ok:false, retry:false, err:new Error('Gemini API 키가 올바르지 않아요. 설정에서 다시 확인해 주세요.')};
+      return {ok:false, retry, err:new Error('Gemini 오류 ' + r.status + ': ' + m)};
+    }
+    const cand = (j.candidates || [])[0] || {};
+    const text = ((cand.content || {}).parts || []).map(p => p.text || '').join('').trim();
+    if(!text) return {ok:false, retry: !cand.finishReason, err:new Error('Gemini가 빈 답을 보냈어요. (' + (cand.finishReason || '') + ')')};
+    return {ok:true, text};
+  }finally{ clearTimeout(timer); outerSignal.removeEventListener('abort', onOuter); }
 }
 const fileParts = files => (files||[]).filter(f => f.data).map(f => ({inline_data:{mime_type:f.mime || 'application/octet-stream', data:f.data}}));
 
@@ -344,7 +382,7 @@ function chatTranscript(){
   return chat.filter(m => m.role !== 'error').map(m => (m.role === 'user' ? '사용자: ' : 'Gemini: ') + m.text +
     (m.files && m.files.length ? ' (첨부: ' + m.files.map(f => f.name).join(', ') + ')' : '')).join('\n\n');
 }
-function fatal(e){ if(job){ const last = job.steps[job.steps.length-1]; if(last && last.status === 'run') finish(last, 'err', String(e.message || e)); else addStep('system', '오류', 'err', String(e.message || e)); setPhase('err', '멈췄어요 — 아래 내용을 확인해 주세요'); } running = false; }
+function fatal(e){ if(job && job.phase === 'err' && /중지/.test(job.message)) { running = false; return; } if(job){ const last = job.steps[job.steps.length-1]; if(last && last.status === 'run') finish(last, 'err', String(e.message || e)); else addStep('system', '오류', 'err', String(e.message || e)); setPhase('err', '멈췄어요 — 아래 내용을 확인해 주세요'); } running = false; }
 
 async function drive(files){
   if(running) return; running = true;
@@ -352,7 +390,7 @@ async function drive(files){
     if(job.phase === 'brief'){
       const s = addStep('gemini', job.chat ? 'Gemini · 대화 내용으로 지시서 작성' : 'Gemini · 지시서 작성');
       const text = job.chat ? '[Conversation]\n' + chatTranscript() + '\n\n[Task now]\n' + job.request : job.request;
-      const brief = await gemini(job.chat ? P_BRIEF_CHAT : P_BRIEF, [{role:'user', parts:[{text}, ...fileParts(files)]}]);
+      const brief = await gemini(job.chat ? P_BRIEF_CHAT : P_BRIEF, [{role:'user', parts:[{text}, ...fileParts(files)]}], msg => { s.body = msg; save(); });
       job.brief = brief; finish(s, 'ok', brief);
       job.phase = 'dispatch'; save();
       await dispatch(brief, files, 'Claude Code · 코딩');
@@ -399,7 +437,7 @@ async function dispatch(taskBody, files, title){
 async function waitReport(){
   const s = [...job.steps].reverse().find(x => x.kind === 'claude' && x.status === 'run');
   const limit = job.fired + cfg.waitMin * 60000;
-  while(job.phase === 'wait'){
+  while(job && job.phase === 'wait'){
     const f = await getFile('.relay/report.md', job.branch).catch(() => null);
     if(f && f.text.includes('RUN-ID: ' + job.runId)){
       const body = f.text.split(/\n---\n/).slice(1).join('\n---\n').trim() || f.text;
@@ -431,7 +469,7 @@ async function review(){
   finish(s0, 'ok', files.join('\n'));
   if(diff.length > 120000) diff = diff.slice(0, 120000) + '\n[diff truncated]';
   const s = addStep('gemini', `Gemini · 검토 ${job.round}회차`);
-  const rv = await gemini(P_REVIEW, [{role:'user', parts:[{text:'[Work brief]\n' + job.brief + '\n\n[Changes (git diff)]\n' + diff}]}]);
+  const rv = await gemini(P_REVIEW, [{role:'user', parts:[{text:'[Work brief]\n' + job.brief + '\n\n[Changes (git diff)]\n' + diff}]}], msg => { s.body = msg; save(); });
   if(/^\W*OK\W*$/i.test(rv.trim()) || /^OK\b/i.test(rv.trim())){ finish(s, 'ok', '문제 없음 — 검토 통과'); return wrapUp('ok', '완료'); }
   finish(s, 'ok', rv);
   job.nextTask = job.brief + '\n\n[Code review findings — fix only the valid ones, touch nothing else]\n' + rv + '\n\n[Previous report]\n' + job.lastReport;
@@ -467,6 +505,15 @@ async function sendReply(text){
   drive([]).catch(fatal);
 }
 
+// 중지: Gemini 요청을 끊고 기다리기를 멈춤 (클라우드에서 이미 돌고 있는 Claude는 Claude 앱에서 멈출 수 있어요)
+function stopJob(){
+  if(gemAbort) gemAbort.abort();
+  const last = job.steps[job.steps.length - 1];
+  if(last && last.status === 'run') finish(last, 'err', '중지됨' + (job.phase === 'wait' ? ' — 클라우드에서 진행 중인 Claude 작업은 Claude 앱 Code 탭에서 멈출 수 있어요.' : ''));
+  setPhase('err', '중지했어요');
+  running = false;
+}
+
 // 공개 반영: .relay 파일 지우고 PR 합치기
 async function deployPR(){
   const s = addStep('system', '공개 사이트에 반영 (main에 합치기)');
@@ -499,7 +546,8 @@ function render(){
   const links = [job.prUrl ? `<a href="${esc(job.prUrl)}" target="_blank" rel="noopener">GitHub PR</a>` : '',
     job.preview ? `<a href="${esc(job.preview)}" target="_blank" rel="noopener">미리보기 열기</a>` : '',
     '<a href="https://claude.ai/code" target="_blank" rel="noopener">Claude 작업 보기</a>'].filter(Boolean).join('');
-  $('#banner').innerHTML = `<div class="banner ${cls}"><div class="m">${esc(msg)}</div><div class="hint">요청 · ${esc(job.request)}${job.chat ? ' (Gemini 대화 연결)' : ''}</div><div class="links">${links}</div></div>`;
+  const canStop = ['brief','dispatch','wait','review'].includes(job.phase);
+  $('#banner').innerHTML = `<div class="banner ${cls}"><div class="row" style="justify-content:space-between"><div class="m">${esc(msg)}</div>${canStop ? '<button class="danger" id="stopBtn">중지</button>' : ''}</div><div class="hint">요청 · ${esc(job.request)}${job.chat ? ' (Gemini 대화 연결)' : ''}</div><div class="links">${links}</div></div>`;
   const s = JSON.stringify(job.steps);
   if(s !== sig){
     sig = s;
@@ -510,6 +558,7 @@ function render(){
       return `<details class="step k-${st.kind}" data-i="${i}" ${open && st.body ? 'open' : ''}><summary><span class="badge">${badge[st.kind]||'·'}</span><span class="ttl">${esc(st.title)}</span>${stat}</summary>${st.body ? `<pre class="body">${esc(st.body)}</pre>` : ''}</details>`;
     }).join('');
   }
+  if($('#stopBtn')) $('#stopBtn').onclick = stopJob;
   // 반영 버튼
   if(job.phase === 'done' && job.pr){
     if(!$('#deployBox').dataset.on){
@@ -545,7 +594,7 @@ function renderChat(){
     }).join('') + '</div>' : '';
     if(m.role === 'user') return `<div class="bubble user">${filesHTML}${esc(m.text)}</div>`;
     if(m.role === 'model') return `<div class="bubble model"><div class="who">Gemini</div>${esc(m.text)}</div>`;
-    return `<div class="bubble error">${esc(m.text)}</div>`;
+    return `<div class="bubble error">${esc(m.text)}${i === chat.length - 1 && !busyChat ? '<div style="margin-top:8px"><button data-retry="1">다시 보내기</button></div>' : ''}</div>`;
   }).join('') + (busyChat ? `<div class="bubble model"><span class="spin" style="display:inline-block"></span> 생각하는 중…</div>` : '');
   if(tab === 'chat'){ seen = chat.length; window.scrollTo(0, document.body.scrollHeight); }
   $('#chatDot').hidden = tab === 'chat' || chat.length <= seen;
@@ -594,18 +643,26 @@ $('#pending').onclick = e => { const b = e.target.closest('button[data-rm]'); if
 $('#input').addEventListener('paste', e => { const fs = [...((e.clipboardData && e.clipboardData.files) || [])]; if(fs.length){ e.preventDefault(); addFiles(fs); } });
 
 // ---------------- 보내기 ----------------
-async function askGemini(text){
-  const files = pending.slice(); pending = []; renderPending();
-  const idx = chat.length;
-  chat.push({role:'user', text: text || '첨부한 파일을 봐줘.', files: files.map(f => ({name:f.name, mime:f.mime, size:f.size}))});
-  chatFiles[idx] = files;
-  store.set('chat', chat); busyChat = true; renderChat(); updateComposer();
+$('#chat').addEventListener('click', e => {
+  if(!e.target.closest('button[data-retry]') || busyChat) return;
+  if(chat.length && chat[chat.length-1].role === 'error'){ chat.pop(); runChat(); }
+});
+async function runChat(){
+  busyChat = true; renderChat(); updateComposer();
   try{
     const contents = chat.map((m, i) => m.role === 'error' ? null : ({role: m.role === 'user' ? 'user' : 'model', parts:[{text:m.text}, ...(m.role === 'user' ? fileParts(chatFiles[i]) : [])]})).filter(Boolean);
     const ans = await gemini(P_CHAT, contents);
     chat.push({role:'model', text: ans});
   }catch(e){ chat.push({role:'error', text: e.message}); }
   busyChat = false; store.set('chat', chat); renderChat(); updateComposer();
+}
+async function askGemini(text){
+  const files = pending.slice(); pending = []; renderPending();
+  const idx = chat.length;
+  chat.push({role:'user', text: text || '첨부한 파일을 봐줘.', files: files.map(f => ({name:f.name, mime:f.mime, size:f.size}))});
+  chatFiles[idx] = files;
+  store.set('chat', chat);
+  await runChat();
 }
 
 $('#sendBtn').onclick = async () => {
@@ -632,7 +689,9 @@ $('#unlink').onclick = () => { useChat = false; updateComposer(); };
 // ---------------- 설정 ----------------
 function loadSet(){ $('#sGem').value = cfg.gemKey; $('#sModel').value = cfg.model; $('#sGh').value = cfg.ghToken; $('#sRepo').value = cfg.repo; $('#sRounds').value = cfg.rounds; $('#sWait').value = cfg.waitMin; }
 $('#saveSet').onclick = () => {
-  cfg = {gemKey: $('#sGem').value.trim(), model: $('#sModel').value.trim() || 'gemini-flash-latest', ghToken: $('#sGh').value.trim(),
+  let gk = $('#sGem').value.trim(), md = $('#sModel').value.trim();
+  if(md && !/^gemini/i.test(md)){ if(!gk) gk = md; md = ''; }
+  cfg = {gemKey: gk, model: md || 'gemini-flash-latest', ghToken: $('#sGh').value.trim(),
     repo: $('#sRepo').value.trim().replace(/^https?:\/\/github\.com\//,'').replace(/\.git$/,'') || 'Gwangeo-pr/gwangeo-app',
     rounds: Math.max(0, Math.min(3, +$('#sRounds').value || 0)), waitMin: Math.max(5, Math.min(120, +$('#sWait').value || 40))};
   store.set('cfg', cfg); $('#setMsg').textContent = '저장했어요.'; renderStatus();
