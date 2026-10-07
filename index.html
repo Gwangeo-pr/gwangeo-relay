@@ -93,6 +93,7 @@ button:disabled{opacity:.45}
 .bubble{max-width:88%;padding:10px 13px;border-radius:16px;white-space:pre-wrap;word-break:break-word}
 .bubble.user{align-self:flex-end;background:var(--accent);color:var(--accent-ink);border-bottom-right-radius:5px}
 .bubble.model{align-self:flex-start;background:var(--panel);border:1px solid var(--line);border-bottom-left-radius:5px}
+.bubble.sysnote{align-self:center;max-width:94%;font-size:13px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:7px 14px;text-align:center}
 .bubble.error{align-self:flex-start;background:var(--panel);border:1px solid var(--err);color:var(--err);font-size:13px}
 .who{font-size:11px;font-weight:800;color:var(--gem);margin-bottom:3px}
 .files{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
@@ -317,6 +318,8 @@ async function geminiOnce(model, system, contents, outerSignal){
 const fileParts = files => (files||[]).filter(f => f.data).map(f => ({inline_data:{mime_type:f.mime || 'application/octet-stream', data:f.data}}));
 
 const P_CHAT = 'You are Gemini, helping a non-developer collaborator who builds the web app "광어" (gwangeo-app) with Claude Code. Answer in Korean, clearly and concisely. Look carefully at any attached images, PDFs or videos. If they want code changed, explain what should change; Claude Code will do the actual coding later.';
+const CHAT_HANDOFF = ' IMPORTANT: this app passes work to Claude Code automatically. Never tell the user to ask or instruct Claude Code themselves, and never write a request for them to copy. If the user\'s latest message asks for something to be built, applied, changed or fixed in the app (for example 적용해줘, 만들어줘, 고쳐줘, 바꿔줘, 미리보기 만들어), first explain briefly in Korean what you analyzed and what will be done, then end your reply with the exact marker [[WORK]] on its own last line. If the user is only asking a question or discussing, do not add the marker.';
+const WORK_MARKER = '[[WORK]]';
 const P_BRIEF = 'Rewrite the request below as a short work brief for Claude Code (a coding agent) working in the gwangeo-app repository. List what to change and what to do; name files only if obvious. Describe any attached screenshots in concrete words. Maximum 15 lines. No greetings, no explanations, do not do the work yourself. Write the brief in English.';
 const P_BRIEF_CHAT = 'Below is a conversation between the user and you (Gemini) about the gwangeo-app, followed by the task to do now. Based on what was decided, write a short work brief for Claude Code (a coding agent). List what to change and what to do; name files only if obvious. Describe relevant attachments in concrete words. Maximum 15 lines. No greetings, no explanations. Write the brief in English.';
 const P_REVIEW = 'The text below contains a work brief and a git diff of the changes made for it. Judge only the code in this diff: look for bugs, broken logic, or parts of this diff that contradict the brief. Parts of the brief that do not appear in the diff may already have been done earlier, so never ask to redo them. If there are no real problems, reply with exactly: OK  Otherwise list only what must be fixed, maximum 5 lines, in English. No praise.';
@@ -379,7 +382,7 @@ async function startJob(request, withChat){
 
 function chatFilesFlat(){ const out = []; Object.values(chatFiles).forEach(a => out.push(...a)); return out; }
 function chatTranscript(){
-  return chat.filter(m => m.role !== 'error').map(m => (m.role === 'user' ? '사용자: ' : 'Gemini: ') + m.text +
+  return chat.filter(m => m.role === 'user' || m.role === 'model').map(m => (m.role === 'user' ? '사용자: ' : 'Gemini: ') + m.text +
     (m.files && m.files.length ? ' (첨부: ' + m.files.map(f => f.name).join(', ') + ')' : '')).join('\n\n');
 }
 function fatal(e){ if(job && job.phase === 'err' && /중지/.test(job.message)) { running = false; return; } if(job){ const last = job.steps[job.steps.length-1]; if(last && last.status === 'run') finish(last, 'err', String(e.message || e)); else addStep('system', '오류', 'err', String(e.message || e)); setPhase('err', '멈췄어요 — 아래 내용을 확인해 주세요'); } running = false; }
@@ -585,7 +588,7 @@ function renderStatus(){
 
 function renderChat(){
   const el = $('#chat');
-  if(!chat.length){ el.innerHTML = `<div class="empty">작업 전에 Gemini와 먼저 상의해 보세요. 사진·캡처·PDF·영상도 📎로 첨부할 수 있어요.<br>정리되면 <b>이 대화로 작업하기</b>를 누르면 돼요.</div>`; }
+  if(!chat.length){ el.innerHTML = `<div class="empty">사진·캡처·PDF·영상을 📎로 첨부하고 하고 싶은 걸 말해보세요.<br>"적용해줘", "만들어줘"처럼 작업을 요청하면 Gemini가 분석 내용을 알려준 뒤 <b>Claude에게 자동으로 넘겨요.</b> 질문만 하면 답만 해요.</div>`; }
   else el.innerHTML = chat.map((m, i) => {
     const fl = (chatFiles[i] || []);
     const filesHTML = (m.files && m.files.length) ? '<div class="files">' + m.files.map((f, k) => {
@@ -594,6 +597,7 @@ function renderChat(){
     }).join('') + '</div>' : '';
     if(m.role === 'user') return `<div class="bubble user">${filesHTML}${esc(m.text)}</div>`;
     if(m.role === 'model') return `<div class="bubble model"><div class="who">Gemini</div>${esc(m.text)}</div>`;
+    if(m.role === 'system') return `<div class="bubble sysnote">${esc(m.text)}</div>`;
     return `<div class="bubble error">${esc(m.text)}${i === chat.length - 1 && !busyChat ? '<div style="margin-top:8px"><button data-retry="1">다시 보내기</button></div>' : ''}</div>`;
   }).join('') + (busyChat ? `<div class="bubble model"><span class="spin" style="display:inline-block"></span> 생각하는 중…</div>` : '');
   if(tab === 'chat'){ seen = chat.length; window.scrollTo(0, document.body.scrollHeight); }
@@ -604,7 +608,7 @@ function updateComposer(){
   const inp = $('#input'), send = $('#sendBtn');
   $('#composer').hidden = tab === 'set';
   $('#chatTools').hidden = tab !== 'chat' || !chat.some(m => m.role === 'model');
-  const n = chat.filter(m => m.role !== 'error').length;
+  const n = chat.filter(m => m.role === 'user' || m.role === 'model').length;
   if(useChat && !n) useChat = false;
   $('#linked').hidden = !(tab === 'work' && useChat);
   $('#linkedTxt').textContent = `Gemini 대화 연결됨 · 메시지 ${n}개`;
@@ -650,11 +654,25 @@ $('#chat').addEventListener('click', e => {
 async function runChat(){
   busyChat = true; renderChat(); updateComposer();
   try{
-    const contents = chat.map((m, i) => m.role === 'error' ? null : ({role: m.role === 'user' ? 'user' : 'model', parts:[{text:m.text}, ...(m.role === 'user' ? fileParts(chatFiles[i]) : [])]})).filter(Boolean);
-    const ans = await gemini(P_CHAT, contents);
+    const contents = chat.map((m, i) => (m.role !== 'user' && m.role !== 'model') ? null : ({role: m.role === 'user' ? 'user' : 'model', parts:[{text:m.text}, ...(m.role === 'user' ? fileParts(chatFiles[i]) : [])]})).filter(Boolean);
+    let ans = await gemini(P_CHAT + CHAT_HANDOFF, contents);
+    const wantsWork = ans.includes(WORK_MARKER);
+    ans = ans.split(WORK_MARKER).join('').trim();
     chat.push({role:'model', text: ans});
+    if(wantsWork) handoffToClaude();
   }catch(e){ chat.push({role:'error', text: e.message}); }
   busyChat = false; store.set('chat', chat); renderChat(); updateComposer();
+}
+// Gemini가 작업 요청을 알아채면 분석 내용 그대로 Claude에게 자동으로 넘김
+function handoffToClaude(){
+  const lastUser = [...chat].reverse().find(m => m.role === 'user');
+  let note = '→ 분석 내용으로 Claude Code에게 작업을 넘겼어요. 작업 탭에서 진행 상황을 볼 수 있어요.';
+  try{
+    sig = ''; openMap = {};
+    startJob(lastUser ? lastUser.text : '', true);
+    setTimeout(() => setTab('work'), 1500);
+  }catch(e){ note = '작업을 넘기지 못했어요: ' + e.message; }
+  chat.push({role:'system', text: note});
 }
 async function askGemini(text){
   const files = pending.slice(); pending = []; renderPending();
