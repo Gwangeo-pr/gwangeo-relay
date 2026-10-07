@@ -333,28 +333,32 @@ async function gemini(system, contents, progress){
   const first = /^gemini/i.test(cfg.model || '') ? cfg.model : 'gemini-flash-latest';
   const models = [first, ...GEM_FALLBACKS.filter(m => m !== first)];
   const outer = new AbortController(); gemAbort = outer;
-  const deadline = Date.now() + 8 * 60000;
-  let lastErr = null;
+  const start = Date.now(), deadline = start + 6 * 60000;
+  let label = '', lastErr = null;
+  // 진행 중임을 알 수 있게 몇 초째인지 계속 보여준다
+  const say = t => { label = t; if(progress) progress(t + ` (${Math.round((Date.now() - start) / 1000)}초)`); };
+  const ticker = setInterval(() => { if(label) say(label); }, 3000);
   try{
     for(const m of models){
       for(let t = 0; t < 3; t++){
         if(outer.signal.aborted) throw new Error('중지했어요');
-        if(Date.now() > deadline) throw new Error('Gemini가 8분 넘게 답하지 않아 멈췄어요. 잠시 뒤 다시 해주세요.');
-        if(progress) progress(m === first && t === 0 ? `Gemini(${m})에 요청 중…` : `Gemini가 붐벼서 다시 시도 중… (${m}, ${t+1}번째)`);
+        if(Date.now() > deadline) throw new Error('Gemini가 6분 넘게 답하지 않아 멈췄어요. 잠시 뒤 다시 해주세요.');
+        say(m === first && t === 0 ? `Gemini(${m})에 요청 중…` : `Gemini가 느리거나 붐벼서 다시 시도 중… (${m}${t ? ', ' + (t+1) + '번째' : ''})`);
         const res = await geminiOnce(m, system, contents, outer.signal);
         if(res.ok) return res.text;
         lastErr = res.err;
         if(!res.retry) throw res.err;
+        if(res.timeout) break;            // 오래 붙잡혀 있던 모델은 다시 기다리지 않고 바로 다음 모델로
         if(t < 2) await sleepAbort((2 + t * 4) * 1000, outer.signal);
       }
     }
     throw new Error('Gemini가 지금 많이 붐벼요. 여러 모델로 다시 시도했지만 실패했어요. 1~2분 뒤 다시 해주세요.\n(' + (lastErr && lastErr.message) + ')');
-  }finally{ if(gemAbort === outer) gemAbort = null; }
+  }finally{ clearInterval(ticker); if(gemAbort === outer) gemAbort = null; }
 }
 function sleepAbort(ms, signal){ return new Promise(res => { const t = setTimeout(res, ms); signal.addEventListener('abort', () => { clearTimeout(t); res(); }, {once:true}); }); }
 async function geminiOnce(model, system, contents, outerSignal){
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort('timeout'), 3 * 60000);
+  const timer = setTimeout(() => ac.abort('timeout'), 75000);   // 한 번에 최대 75초
   const onOuter = () => ac.abort('stop'); outerSignal.addEventListener('abort', onOuter, {once:true});
   try{
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
@@ -364,7 +368,7 @@ async function geminiOnce(model, system, contents, outerSignal){
         body: JSON.stringify({systemInstruction:{parts:[{text:system}]}, contents})});
     }catch(e){
       if(outerSignal.aborted) return {ok:false, retry:false, err:new Error('중지했어요')};
-      return {ok:false, retry:true, err:new Error(ac.signal.aborted ? 'Gemini가 3분 넘게 답하지 않았어요' : 'Gemini에 연결하지 못했어요: ' + e.message)};
+      return {ok:false, retry:true, timeout: ac.signal.aborted, err:new Error(ac.signal.aborted ? 'Gemini(' + model + ')가 75초 넘게 답하지 않았어요' : 'Gemini에 연결하지 못했어요: ' + e.message)};
     }
     const j = await r.json().catch(() => ({}));
     if(!r.ok){
