@@ -198,7 +198,7 @@ a{color:var(--accent)}
         <div class="grow"><label class="t" for="sWait">Claude 대기 최대(분)</label><input type="number" id="sWait" min="5" max="120"></div>
       </div>
       <div class="row"><button class="primary" id="saveSet">저장</button><button id="testSet">연결 확인</button></div>
-      <div class="hint" id="setMsg" style="margin-top:8px"></div>
+      <div class="hint" id="setMsg" style="margin-top:8px;white-space:pre-line"></div>
       <div class="hint" style="margin-top:8px">키와 토큰은 이 기기(이 앱·브라우저)에만 저장돼요. 다른 곳으로 보내지 않아요.</div>
     </div>
 
@@ -809,11 +809,30 @@ $('#saveSet').onclick = () => {
   store.set('cfg', cfg); $('#setMsg').textContent = '저장했어요.'; renderStatus();
 };
 $('#testSet').onclick = async () => {
-  $('#setMsg').textContent = '확인하는 중…';
-  const out = [];
-  try{ const r = await gh(R()); out.push('GitHub: ' + r.full_name + (r.permissions && r.permissions.push ? ' · 쓰기 가능' : ' · 쓰기 권한 없음')); }catch(e){ out.push(e.message); }
-  try{ await gemini('Reply with OK.', [{role:'user', parts:[{text:'ping'}]}]); out.push('Gemini: 연결됨'); }catch(e){ out.push(e.message); }
-  $('#setMsg').textContent = out.join(' / ');
+  // GitHub·Gemini를 동시에 확인하고, 끝나는 대로 바로 보여준다. 각각 최대 20초.
+  const res = {gh:'GitHub: 확인 중…', gem:'Gemini: 확인 중…'};
+  const show = () => { $('#setMsg').textContent = res.gh + '\n' + res.gem; };
+  show();
+  const withTimeout = (p, ms, msg) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(msg)), ms))]);
+  const ghCheck = (async () => {
+    try{ const r = await withTimeout(gh(R()), 20000, 'GitHub: 20초 넘게 응답이 없어요. 인터넷 연결을 확인해 주세요.');
+      res.gh = 'GitHub: ' + r.full_name + (r.permissions && r.permissions.push ? ' · 쓰기 가능 ✓' : ' · 쓰기 권한 없음 (토큰 권한을 Read and write로)'); }
+    catch(e){ res.gh = e.message; }
+    show();
+  })();
+  const gemCheck = (async () => {
+    if(!cfg.gemKey){ res.gem = 'Gemini: API 키가 비어 있어요.'; show(); return; }
+    const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 20000);
+    try{
+      const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1', {headers:{'x-goog-api-key':cfg.gemKey}, signal: ac.signal, cache:'no-store'});
+      if(r.ok) res.gem = 'Gemini: 연결됨 ✓';
+      else { let m = ''; try{ m = (await r.json()).error.message; }catch(e){}
+        res.gem = (r.status === 400 || r.status === 403) ? 'Gemini: API 키가 올바르지 않아요. 다시 확인해 주세요.' : 'Gemini 오류 ' + r.status + ': ' + m; }
+    }catch(e){ res.gem = ac.signal.aborted ? 'Gemini: 20초 넘게 응답이 없어요. 잠시 뒤 다시 눌러주세요.' : 'Gemini에 연결하지 못했어요: ' + e.message; }
+    finally{ clearTimeout(t); }
+    show();
+  })();
+  await Promise.all([ghCheck, gemCheck]);
 };
 $('#routinePrompt').textContent = ROUTINE_PROMPT;
 $('#copyRoutine').onclick = async () => {
