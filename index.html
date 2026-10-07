@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="광어 중계기">
+<meta name="theme-color" content="#14161a">
+<title>광어 중계기</title>
+<style>
+/* 모바일 한 손 조작: 상단 탭 + 카드형 타임라인 + 하단 고정 입력창 */
+:root{
+  --bg:#f3f4f1; --panel:#ffffff; --ink:#191b1f; --muted:#6c7079; --line:#e1e3de;
+  --accent:#1d6b55; --accent-ink:#ffffff; --accent-soft:#dcece5;
+  --gem:#2d5db0; --gem-soft:#e4ecf8; --cla:#b0532c; --cla-soft:#f6e6dc; --sys-soft:#ecede9;
+  --ok:#2a7a4b; --warn:#a46a00; --err:#b3261e; --code:#f6f6f3;
+  --font:"Pretendard","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#121417; --panel:#1c1f23; --ink:#eceae5; --muted:#9a9ea6; --line:#2f3338;
+    --accent:#5fb896; --accent-ink:#0d1a14; --accent-soft:#1d3229;
+    --gem:#8aaaf0; --gem-soft:#1c2638; --cla:#e6987a; --cla-soft:#36241c; --sys-soft:#25282c;
+    --ok:#6cc58f; --warn:#e3ab4c; --err:#f08a80; --code:#17191c;
+    color-scheme:dark;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--font);-webkit-text-size-adjust:100%}
+body{padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}
+[hidden]{display:none!important}
+.wrap{max-width:760px;margin:0 auto;padding:12px 16px 120px}
+header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0 10px}
+h1{font-size:19px;margin:0;letter-spacing:-.3px}
+.sub{font-size:12px;color:var(--muted)}
+.tabs{display:flex;gap:4px;background:var(--sys-soft);padding:4px;border-radius:12px;margin-bottom:12px;position:sticky;top:env(safe-area-inset-top,0px);z-index:5}
+.tab{flex:1;border:0;background:none;padding:9px 6px;border-radius:9px;font:inherit;font-weight:700;color:var(--muted);position:relative}
+.tab.on{background:var(--panel);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.tab .dot{position:absolute;top:7px;right:12px;width:7px;height:7px;border-radius:50%;background:var(--gem)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+label.t{display:block;font-size:12px;font-weight:700;color:var(--muted);margin:0 0 6px;letter-spacing:.2px}
+input[type=text],input[type=password],input[type=number],textarea,select{width:100%;border:1px solid var(--line);background:var(--bg);color:var(--ink);
+  border-radius:10px;padding:10px 12px;font:inherit;font-size:16px;outline:none}
+input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+textarea{min-height:84px;resize:vertical}
+button{font:inherit;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:10px 14px;cursor:pointer}
+button:disabled{opacity:.45}
+.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:800}
+.danger{color:var(--err)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.row > .grow{flex:1;min-width:0}
+.hint{font-size:12px;color:var(--muted)}
+.msg-err{color:var(--err);font-size:13px;margin-top:6px}
+.field{margin-bottom:12px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{font-size:12px;padding:3px 9px;border-radius:999px;background:var(--sys-soft);color:var(--muted)}
+.chip.ok{color:var(--ok)} .chip.bad{color:var(--err)}
+
+/* 상태 띠 */
+.banner{border-radius:14px;padding:12px 14px;margin-bottom:12px;border:1px solid var(--line);background:var(--panel)}
+.banner .m{font-weight:800}
+.banner.run .m{color:var(--accent)} .banner.ok .m{color:var(--ok)} .banner.ask .m{color:var(--cla)}
+.banner.warn .m{color:var(--warn)} .banner.err .m{color:var(--err)}
+.banner .links{margin-top:6px;display:flex;gap:10px;flex-wrap:wrap;font-size:13px}
+.banner a{color:var(--accent);font-weight:700}
+
+/* 타임라인 */
+.step{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:8px;overflow:hidden}
+.step summary{list-style:none;display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer}
+.step summary::-webkit-details-marker{display:none}
+.badge{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-weight:800;font-size:12px;flex:none}
+.k-gemini .badge{background:var(--gem-soft);color:var(--gem)}
+.k-claude .badge{background:var(--cla-soft);color:var(--cla)}
+.k-system .badge{background:var(--sys-soft);color:var(--muted)}
+.k-user .badge{background:var(--accent-soft);color:var(--accent)}
+.step .ttl{flex:1;font-weight:700;min-width:0}
+.k-system .ttl{font-weight:600;color:var(--muted)}
+.st{font-size:12px;color:var(--muted);display:flex;gap:6px;align-items:center;white-space:nowrap}
+.st.ok{color:var(--ok)} .st.err{color:var(--err)}
+.spin{width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion: reduce){.spin{animation:none}}
+.body{margin:0;padding:10px 12px;border-top:1px solid var(--line);background:var(--code);white-space:pre-wrap;word-break:break-word;font:13px/1.6 var(--mono);max-height:300px;overflow:auto}
+.empty{color:var(--muted);text-align:center;padding:24px 10px;border:1px dashed var(--line);border-radius:14px;font-size:14px}
+.flow{display:flex;justify-content:center;gap:6px;flex-wrap:wrap;margin-top:10px;font-size:12px}
+.flow span{padding:3px 9px;border-radius:999px;background:var(--sys-soft)}
+.flow .g{background:var(--gem-soft);color:var(--gem)} .flow .c{background:var(--cla-soft);color:var(--cla)}
+
+/* 채팅 */
+.chat{display:flex;flex-direction:column;gap:10px;padding-bottom:8px}
+.bubble{max-width:88%;padding:10px 13px;border-radius:16px;white-space:pre-wrap;word-break:break-word}
+.bubble.user{align-self:flex-end;background:var(--accent);color:var(--accent-ink);border-bottom-right-radius:5px}
+.bubble.model{align-self:flex-start;background:var(--panel);border:1px solid var(--line);border-bottom-left-radius:5px}
+.bubble.error{align-self:flex-start;background:var(--panel);border:1px solid var(--err);color:var(--err);font-size:13px}
+.who{font-size:11px;font-weight:800;color:var(--gem);margin-bottom:3px}
+.files{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.thumb{width:96px;height:96px;object-fit:cover;border-radius:10px;display:block}
+.att{display:inline-flex;align-items:center;gap:6px;max-width:210px;padding:4px 8px 4px 4px;border-radius:10px;background:rgba(127,127,127,.15);font-size:12px}
+.att .ico{width:30px;height:30px;border-radius:7px;display:grid;place-items:center;background:var(--sys-soft);color:var(--muted);font-size:10px;font-weight:800;flex:none}
+.att img{width:30px;height:30px;border-radius:7px;object-fit:cover;flex:none}
+.att .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.att button{border:0;background:none;padding:0 2px;color:inherit}
+
+/* 하단 입력창 */
+.composer{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);
+  padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));z-index:10}
+.composer .in{max-width:760px;margin:0 auto}
+.composer textarea{min-height:44px;max-height:160px}
+.pending{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.pending:empty{display:none}
+.linked{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;padding:8px 12px;border-radius:10px;background:var(--gem-soft);color:var(--gem);font-size:13px;font-weight:700}
+.linked button{padding:3px 10px;font-size:12px;background:transparent;color:var(--gem);border-color:currentColor}
+.copybox{font:12px/1.55 var(--mono);background:var(--code);border:1px solid var(--line);border-radius:10px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto}
+ol.steps{padding-left:20px;margin:6px 0} ol.steps li{margin-bottom:6px}
+a{color:var(--accent)}
+.confirm{border:1px solid var(--warn);background:var(--panel);border-radius:12px;padding:12px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>광어 중계기</h1>
+      <div class="sub">Gemini가 지시·검토, Claude Code가 코딩</div>
+    </div>
+    <div class="chips" id="status"></div>
+  </header>
+
+  <div class="tabs">
+    <button class="tab on" data-tab="work">작업</button>
+    <button class="tab" data-tab="chat">Gemini<span class="dot" id="chatDot" hidden></span></button>
+    <button class="tab" data-tab="set">설정</button>
+  </div>
+
+  <!-- 작업 -->
+  <section id="v-work">
+    <div id="banner"></div>
+    <div id="timeline">
+      <div class="empty">아래에 할 일을 적고 보내면 진행 과정이 여기 표시돼요.
+        <div class="flow"><span class="g">Gemini 지시서</span>→<span class="c">Claude 코딩</span>→<span class="g">Gemini 검토</span>→<span>미리보기</span>→<span>공개 반영</span></div>
+      </div>
+    </div>
+    <div id="deployBox"></div>
+  </section>
+
+  <!-- Gemini -->
+  <section id="v-chat" hidden>
+    <div class="chat" id="chat"></div>
+  </section>
+
+  <!-- 설정 -->
+  <section id="v-set" hidden>
+    <div class="panel">
+      <div class="field">
+        <label class="t" for="sGem">Gemini API 키 (무료)</label>
+        <input type="password" id="sGem" autocomplete="off" placeholder="AIza…">
+        <div class="hint"><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>에서 무료로 발급해요.</div>
+      </div>
+      <div class="field">
+        <label class="t" for="sModel">Gemini 모델</label>
+        <input type="text" id="sModel" autocomplete="off">
+        <div class="hint">기본값 gemini-flash-latest (무료 사용 가능). 오류가 나면 gemini-2.5-flash로 바꿔보세요.</div>
+      </div>
+      <div class="field">
+        <label class="t" for="sGh">GitHub 토큰</label>
+        <input type="password" id="sGh" autocomplete="off" placeholder="github_pat_…">
+        <div class="hint">fine-grained 토큰 · 저장소 하나만 · Contents / Pull requests / Issues 읽기·쓰기</div>
+      </div>
+      <div class="field">
+        <label class="t" for="sRepo">저장소</label>
+        <input type="text" id="sRepo" autocomplete="off">
+      </div>
+      <div class="field row">
+        <div class="grow"><label class="t" for="sRounds">검토 최대 횟수</label><input type="number" id="sRounds" min="0" max="3"></div>
+        <div class="grow"><label class="t" for="sWait">Claude 대기 최대(분)</label><input type="number" id="sWait" min="5" max="120"></div>
+      </div>
+      <div class="row"><button class="primary" id="saveSet">저장</button><button id="testSet">연결 확인</button></div>
+      <div class="hint" id="setMsg" style="margin-top:8px"></div>
+      <div class="hint" style="margin-top:8px">키와 토큰은 이 아이폰의 이 브라우저에만 저장돼요. 다른 곳으로 보내지 않아요.</div>
+    </div>
+
+    <div class="panel">
+      <label class="t">처음 한 번: Claude 루틴 만들기</label>
+      <ol class="steps">
+        <li>Safari에서 <a href="https://claude.ai/code/routines" target="_blank" rel="noopener">claude.ai/code/routines</a> → <b>New routine</b></li>
+        <li>이름: <b>광어 중계기</b> · 저장소: <b>gwangeo-app</b> · 환경: Default</li>
+        <li>아래 지시문을 <b>복사</b>해서 Instructions에 붙여넣기</li>
+        <li>Trigger: <b>GitHub event</b> → Pull request → <b>labeled</b> → 필터 <b>Labels</b> 에 <b>relay-run</b> 포함</li>
+        <li>Connectors는 모두 빼고 <b>Create</b></li>
+      </ol>
+      <div class="copybox" id="routinePrompt"></div>
+      <div class="row" style="margin-top:8px"><button id="copyRoutine">지시문 복사</button><span class="hint" id="copyMsg"></span></div>
+    </div>
+
+    <div class="panel">
+      <label class="t">작업 기록 정리</label>
+      <div class="row"><button class="danger" id="resetJob">현재 작업 기록 지우기</button><button class="danger" id="resetChat">Gemini 대화 지우기</button></div>
+      <div class="hint" style="margin-top:6px">GitHub의 브랜치·PR은 지워지지 않아요.</div>
+    </div>
+  </section>
+</div>
+
+<!-- 하단 입력창 -->
+<div class="composer" id="composer">
+  <div class="in">
+    <div class="linked" id="linked" hidden><span id="linkedTxt"></span><button id="unlink">해제</button></div>
+    <div class="pending" id="pending"></div>
+    <input type="file" id="fileIn" multiple hidden accept="image/*,video/*,application/pdf,text/*,.md,.csv,.json">
+    <div class="row">
+      <button id="attachBtn" title="첨부">📎</button>
+      <textarea id="input" class="grow" rows="1" placeholder="할 일을 적어주세요"></textarea>
+      <button class="primary" id="sendBtn">보내기</button>
+    </div>
+    <div class="row" id="chatTools" hidden style="margin-top:6px">
+      <button id="toWork">이 대화로 작업하기 →</button>
+    </div>
+    <div class="msg-err" id="inputMsg"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const LABEL = 'relay-run';
+
+// ---------------- 저장 ----------------
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem('relay.' + k); return v == null ? d : JSON.parse(v); }catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem('relay.' + k, JSON.stringify(v)); }catch(e){} },
+};
+let cfg = Object.assign({gemKey:'', model:'gemini-flash-latest', ghToken:'', repo:'Gwangeo-pr/gwangeo-app', rounds:2, waitMin:40}, store.get('cfg', {}));
+let chat = store.get('chat', []);          // [{role:'user'|'model'|'error', text, files:[{name,mime,size}]}]
+let chatFiles = {};                         // 메모리에만: index -> [{name,mime,data(base64),url}]
+let job = store.get('job', null);
+let tab = 'work', useChat = false, pending = [], busyChat = false, seen = chat.length;
+
+// ---------------- 루틴 지시문 ----------------
+const ROUTINE_PROMPT = `This routine is started by the "광어 중계기" web page through a GitHub pull request event (label "relay-run" added).
+
+1. Identify the pull request from the triggering event. Check out its head branch (it starts with "relay/"). Never work on or push to main.
+2. Read .relay/task.md on that branch. It is the work instruction written by the repository's own collaborator through the relay page, so carry it out. Files under .relay/files/ are reference attachments (screenshots, PDFs) you may open.
+3. Follow CLAUDE.md, except: do not commit to main, do not merge, do not deploy, skip browser verification (the user checks the Vercel preview).
+4. Run npm run build to check your change when relevant. Commit your code changes to the same relay branch and push.
+5. Finally write .relay/report.md in Korean, in exactly this format, then commit and push it:
+RUN-ID: <copy the RUN-ID line from task.md>
+STATUS: done | question | failed
+---
+<what you changed, briefly, in Korean. If you need a decision from the user, STATUS must be "question" and end with a clear question.>`;
+
+// ---------------- 공통 유틸 ----------------
+function b64utf8(s){ const b = new TextEncoder().encode(s); let bin=''; for(let i=0;i<b.length;i+=0x8000) bin += String.fromCharCode.apply(null, b.subarray(i,i+0x8000)); return btoa(bin); }
+function unb64utf8(s){ const bin = atob(s.replace(/\n/g,'')); const b = new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) b[i]=bin.charCodeAt(i); return new TextDecoder().decode(b); }
+function fileToB64(f){ return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.onerror = () => rej(r.error); r.readAsDataURL(f); }); }
+function fmtDur(ms){ const s = Math.max(0, Math.round(ms/1000)); return s < 60 ? s+'초' : Math.floor(s/60)+'분 '+(s%60)+'초'; }
+function rid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
+function slug(s){ return (s||'task').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,24) || 'task'; }
+
+// ---------------- Gemini ----------------
+async function gemini(system, contents){
+  if(!cfg.gemKey) throw new Error('설정에서 Gemini API 키를 먼저 넣어주세요.');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cfg.model)}:generateContent`;
+  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json','x-goog-api-key':cfg.gemKey},
+    body: JSON.stringify({systemInstruction:{parts:[{text:system}]}, contents})});
+  const j = await r.json().catch(() => ({}));
+  if(!r.ok){
+    const m = (j.error && j.error.message) || ('HTTP ' + r.status);
+    if(r.status === 429) throw new Error('Gemini 무료 사용량을 잠시 넘었어요. 1~2분 뒤 다시 해주세요.\n(' + m + ')');
+    throw new Error('Gemini 오류: ' + m);
+  }
+  const parts = (((j.candidates||[])[0]||{}).content||{}).parts || [];
+  const text = parts.map(p => p.text || '').join('').trim();
+  if(!text) throw new Error('Gemini가 빈 답을 보냈어요. (' + ((j.candidates||[])[0]||{}).finishReason + ')');
+  return text;
+}
+const fileParts = files => (files||[]).filter(f => f.data).map(f => ({inline_data:{mime_type:f.mime || 'application/octet-stream', data:f.data}}));
+
+const P_CHAT = 'You are Gemini, helping a non-developer collaborator who builds the web app "광어" (gwangeo-app) with Claude Code. Answer in Korean, clearly and concisely. Look carefully at any attached images, PDFs or videos. If they want code changed, explain what should change; Claude Code will do the actual coding later.';
+const P_BRIEF = 'Rewrite the request below as a short work brief for Claude Code (a coding agent) working in the gwangeo-app repository. List what to change and what to do; name files only if obvious. Describe any attached screenshots in concrete words. Maximum 15 lines. No greetings, no explanations, do not do the work yourself. Write the brief in English.';
+const P_BRIEF_CHAT = 'Below is a conversation between the user and you (Gemini) about the gwangeo-app, followed by the task to do now. Based on what was decided, write a short work brief for Claude Code (a coding agent). List what to change and what to do; name files only if obvious. Describe relevant attachments in concrete words. Maximum 15 lines. No greetings, no explanations. Write the brief in English.';
+const P_REVIEW = 'The text below contains a work brief and a git diff of the changes made for it. Judge only the code in this diff: look for bugs, broken logic, or parts of this diff that contradict the brief. Parts of the brief that do not appear in the diff may already have been done earlier, so never ask to redo them. If there are no real problems, reply with exactly: OK  Otherwise list only what must be fixed, maximum 5 lines, in English. No praise.';
+
+// ---------------- GitHub ----------------
+async function gh(path, opt = {}){
+  if(!cfg.ghToken) throw new Error('설정에서 GitHub 토큰을 먼저 넣어주세요.');
+  const r = await fetch('https://api.github.com' + path, {method: opt.method || 'GET',
+    headers: Object.assign({'Authorization':'Bearer ' + cfg.ghToken, 'Accept': opt.accept || 'application/vnd.github+json', 'X-GitHub-Api-Version':'2022-11-28'},
+      opt.body ? {'Content-Type':'application/json'} : {}),
+    body: opt.body ? JSON.stringify(opt.body) : undefined, cache:'no-store'});
+  if(opt.okStatus && opt.okStatus.includes(r.status)) return null;
+  if(!r.ok){
+    let m = ''; try{ m = (await r.json()).message; }catch(e){}
+    const hint = r.status === 401 ? ' (토큰이 틀렸거나 만료됐어요)' : r.status === 403 || r.status === 404 ? ' (토큰 권한이나 저장소 이름을 확인해 주세요)' : '';
+    const e = new Error('GitHub ' + r.status + ': ' + (m || path) + hint); e.status = r.status; throw e;
+  }
+  if(opt.raw) return r.text();
+  return r.status === 204 ? null : r.json();
+}
+const R = () => '/repos/' + cfg.repo;
+async function getFile(path, ref){
+  try{ const j = await gh(`${R()}/contents/${path}?ref=${encodeURIComponent(ref)}&t=${Date.now()}`); return {sha:j.sha, text:unb64utf8(j.content || '')}; }
+  catch(e){ if(e.status === 404) return null; throw e; }
+}
+async function putFile(path, branch, contentB64, message){
+  const old = await getFileMeta(path, branch);
+  return gh(`${R()}/contents/${path}`, {method:'PUT', body:{message, content:contentB64, branch, sha: old || undefined}});
+}
+async function getFileMeta(path, ref){
+  try{ const j = await gh(`${R()}/contents/${path}?ref=${encodeURIComponent(ref)}&t=${Date.now()}`); return j.sha; }
+  catch(e){ if(e.status === 404) return null; throw e; }
+}
+async function fireLabel(pr){
+  await gh(`${R()}/issues/${pr}/labels/${LABEL}`, {method:'DELETE', okStatus:[404]});
+  await sleep(1500);
+  await gh(`${R()}/issues/${pr}/labels`, {method:'POST', body:{labels:[LABEL]}});
+}
+
+// ---------------- 작업 상태 ----------------
+function save(){ store.set('job', job); render(); }
+function addStep(kind, title, status = 'run', body = ''){
+  const s = {kind, title, status, body, start: Date.now(), end: status === 'run' ? 0 : Date.now()};
+  job.steps.push(s); save(); return s;
+}
+function finish(s, status, body){ s.status = status; s.body = body ?? s.body; s.end = Date.now(); save(); }
+function setPhase(phase, message){ job.phase = phase; if(message !== undefined) job.message = message; save(); }
+const isQuestionReport = rep => /STATUS:\s*question/i.test(rep);
+
+let running = false;
+async function startJob(request, withChat){
+  if(job && ['brief','dispatch','wait','review'].includes(job.phase)){ throw new Error('진행 중인 작업이 있어요. 끝나면 새로 시작할 수 있어요.'); }
+  if(!cfg.gemKey || !cfg.ghToken){ throw new Error('설정 탭에서 Gemini 키와 GitHub 토큰을 먼저 저장해 주세요.'); }
+  job = {id: rid(), request: request || (withChat ? 'Gemini 대화에서 정한 내용대로 진행' : ''), chat: !!withChat, steps: [],
+    phase:'brief', message:'', brief:'', round:0, branch:'', pr:0, prUrl:'', runId:'', fired:0, lastReport:'', preview:'', attachPaths:[]};
+  const ctxFiles = withChat ? chatFilesFlat() : pending.slice();
+  save();
+  drive(ctxFiles).catch(fatal);
+}
+
+function chatFilesFlat(){ const out = []; Object.values(chatFiles).forEach(a => out.push(...a)); return out; }
+function chatTranscript(){
+  return chat.filter(m => m.role !== 'error').map(m => (m.role === 'user' ? '사용자: ' : 'Gemini: ') + m.text +
+    (m.files && m.files.length ? ' (첨부: ' + m.files.map(f => f.name).join(', ') + ')' : '')).join('\n\n');
+}
+function fatal(e){ if(job){ const last = job.steps[job.steps.length-1]; if(last && last.status === 'run') finish(last, 'err', String(e.message || e)); else addStep('system', '오류', 'err', String(e.message || e)); setPhase('err', '멈췄어요 — 아래 내용을 확인해 주세요'); } running = false; }
+
+async function drive(files){
+  if(running) return; running = true;
+  try{
+    if(job.phase === 'brief'){
+      const s = addStep('gemini', job.chat ? 'Gemini · 대화 내용으로 지시서 작성' : 'Gemini · 지시서 작성');
+      const text = job.chat ? '[Conversation]\n' + chatTranscript() + '\n\n[Task now]\n' + job.request : job.request;
+      const brief = await gemini(job.chat ? P_BRIEF_CHAT : P_BRIEF, [{role:'user', parts:[{text}, ...fileParts(files)]}]);
+      job.brief = brief; finish(s, 'ok', brief);
+      job.phase = 'dispatch'; save();
+      await dispatch(brief, files, 'Claude Code · 코딩');
+    }
+    if(job.phase === 'dispatch'){ await dispatch(job.nextTask || job.brief, [], job.nextTitle || 'Claude Code · 작업'); }
+    if(job.phase === 'wait'){ await waitReport(); }
+    if(job.phase === 'review'){ await review(); }
+  }finally{ running = false; render(); }
+}
+
+async function dispatch(taskBody, files, title){
+  // 브랜치·PR 준비 (처음 한 번)
+  if(!job.branch){
+    const s = addStep('system', 'GitHub에 작업 공간 만들기');
+    const base = (await gh(`${R()}/git/ref/heads/main`)).object.sha;
+    job.branch = `relay/${new Date().toISOString().slice(0,10)}-${slug(job.brief.split('\n')[0])}-${job.id.slice(-4)}`;
+    await gh(`${R()}/git/refs`, {method:'POST', body:{ref:'refs/heads/' + job.branch, sha: base}});
+    await gh(`${R()}/labels`, {method:'POST', body:{name:LABEL, color:'1d6b55', description:'광어 중계기: Claude Code 실행'}, okStatus:[422]});
+    // 첨부(이미지·PDF)를 브랜치에 올려 Claude도 볼 수 있게
+    for(const f of (files||[]).filter(f => f.data && !/^video\//.test(f.mime))){
+      const p = '.relay/files/' + f.name.replace(/[^\w.\-가-힣]/g,'_');
+      await putFile(p, job.branch, f.data, 'relay: attach ' + f.name);
+      job.attachPaths.push(p);
+    }
+    job.taskSeed = true; save();
+    finish(s, 'ok', '브랜치 ' + job.branch);
+  }
+  job.runId = rid();
+  const attach = job.attachPaths.length ? '\n\nReference attachments on this branch:\n' + job.attachPaths.join('\n') : '';
+  const task = `RUN-ID: ${job.runId}\n\n${taskBody}${attach}\n\n(Report to the user in Korean in .relay/report.md as the routine instructions say.)\n`;
+  await putFile('.relay/task.md', job.branch, b64utf8(task), 'relay: task ' + job.runId);
+  if(!job.pr){
+    const pr = await gh(`${R()}/pulls`, {method:'POST', body:{title:'[중계기] ' + (job.request || job.brief).split('\n')[0].slice(0,60), head: job.branch, base:'main',
+      body:'광어 중계기에서 만든 작업이에요. 공개 반영 전에 `.relay/` 파일은 자동으로 지워져요.\n\n' + job.brief}});
+    job.pr = pr.number; job.prUrl = pr.html_url;
+  }
+  await fireLabel(job.pr);
+  job.fired = Date.now();
+  addStep('claude', title, 'run', '클라우드에서 Claude Code가 작업 중이에요. Claude 앱 Code 탭에서도 볼 수 있어요.');
+  setPhase('wait', 'Claude Code 작업 중…');
+  await waitReport();
+}
+
+async function waitReport(){
+  const s = [...job.steps].reverse().find(x => x.kind === 'claude' && x.status === 'run');
+  const limit = job.fired + cfg.waitMin * 60000;
+  while(job.phase === 'wait'){
+    const f = await getFile('.relay/report.md', job.branch).catch(() => null);
+    if(f && f.text.includes('RUN-ID: ' + job.runId)){
+      const body = f.text.split(/\n---\n/).slice(1).join('\n---\n').trim() || f.text;
+      job.lastReport = body;
+      if(s) finish(s, /STATUS:\s*failed/i.test(f.text) ? 'err' : 'ok', body);
+      if(isQuestionReport(f.text)){ setPhase('ask', 'Claude가 질문했어요 — 아래에서 답해 주세요'); return; }
+      if(/STATUS:\s*failed/i.test(f.text)){ setPhase('err', 'Claude가 작업을 끝내지 못했어요'); return; }
+      setPhase('review', job.message); return;
+    }
+    if(Date.now() > limit){
+      if(s) finish(s, 'err', cfg.waitMin + '분 넘게 결과가 오지 않았어요. claude.ai/code/routines 에서 루틴이 실행됐는지 확인해 주세요.');
+      setPhase('err', 'Claude 응답을 기다리다 멈췄어요'); return;
+    }
+    await sleep(15000);
+  }
+}
+
+function stripRelay(diff){
+  return diff.split(/(?=^diff --git )/m).filter(ch => !/^diff --git a\/\.relay\//.test(ch)).join('');
+}
+
+async function review(){
+  if(job.round >= cfg.rounds){ return wrapUp('ok', '완료'); }
+  job.round++; save();
+  const s0 = addStep('system', '바뀐 코드 가져오기');
+  let diff = stripRelay(await gh(`${R()}/compare/main...${encodeURIComponent(job.branch)}`, {accept:'application/vnd.github.diff', raw:true}));
+  if(!diff.trim()){ finish(s0, 'ok', '바뀐 코드가 없어요.'); return wrapUp('ok', '완료 (바뀐 코드 없음)'); }
+  const files = (diff.match(/^diff --git a\/(\S+)/gm) || []).map(l => l.replace('diff --git a/', ''));
+  finish(s0, 'ok', files.join('\n'));
+  if(diff.length > 120000) diff = diff.slice(0, 120000) + '\n[diff truncated]';
+  const s = addStep('gemini', `Gemini · 검토 ${job.round}회차`);
+  const rv = await gemini(P_REVIEW, [{role:'user', parts:[{text:'[Work brief]\n' + job.brief + '\n\n[Changes (git diff)]\n' + diff}]}]);
+  if(/^\W*OK\W*$/i.test(rv.trim()) || /^OK\b/i.test(rv.trim())){ finish(s, 'ok', '문제 없음 — 검토 통과'); return wrapUp('ok', '완료'); }
+  finish(s, 'ok', rv);
+  job.nextTask = job.brief + '\n\n[Code review findings — fix only the valid ones, touch nothing else]\n' + rv + '\n\n[Previous report]\n' + job.lastReport;
+  job.nextTitle = 'Claude Code · 지적사항 수정';
+  setPhase('dispatch', '');
+  await dispatch(job.nextTask, [], job.nextTitle);
+  if(job.phase === 'review') await review();
+}
+
+async function wrapUp(result, message){
+  setPhase(result === 'ok' ? 'done' : result, message);
+  await findPreview();
+}
+
+async function findPreview(){
+  try{
+    const deps = await gh(`${R()}/deployments?ref=${encodeURIComponent(job.branch)}&per_page=5`);
+    for(const d of deps || []){
+      const st = await gh(`${R()}/deployments/${d.id}/statuses?per_page=5`);
+      const ok = (st || []).find(x => x.state === 'success' && (x.environment_url || x.target_url));
+      if(ok){ job.preview = ok.environment_url || ok.target_url; save(); return; }
+    }
+  }catch(e){}
+}
+
+async function sendReply(text){
+  if(!job || job.phase !== 'ask') return;
+  addStep('user', '내 답변', 'info', text);
+  job.nextTask = job.brief + '\n\n[Your previous report]\n' + job.lastReport + '\n\n[User reply — continue the work accordingly]\n' + text;
+  job.nextTitle = 'Claude Code · 내 답변으로 이어서 작업';
+  job.brief += '\n\n[Additional instruction from the user]\n' + text;
+  setPhase('dispatch', '');
+  drive([]).catch(fatal);
+}
+
+// 공개 반영: .relay 파일 지우고 PR 합치기
+async function deployPR(){
+  const s = addStep('system', '공개 사이트에 반영 (main에 합치기)');
+  try{
+    const list = async dir => {
+      const out = [];
+      try{ for(const it of await gh(`${R()}/contents/${dir}?ref=${encodeURIComponent(job.branch)}&t=${Date.now()}`)){
+        if(it.type === 'dir') out.push(...await list(it.path)); else out.push(it); } }catch(e){ if(e.status !== 404) throw e; }
+      return out;
+    };
+    for(const f of await list('.relay')){
+      await gh(`${R()}/contents/${f.path}`, {method:'DELETE', body:{message:'relay: cleanup', sha:f.sha, branch:job.branch}});
+    }
+    await sleep(2000);
+    await gh(`${R()}/pulls/${job.pr}/merge`, {method:'PUT', body:{merge_method:'squash', commit_title:(job.request || 'relay').split('\n')[0].slice(0,60) + ' [deploy]'}});
+    finish(s, 'ok', 'main에 합쳤어요. Vercel이 1~2분 안에 공개 사이트를 업데이트해요.');
+    setPhase('merged', '공개 사이트에 반영했어요');
+  }catch(e){ finish(s, 'err', e.message); }
+}
+
+// ---------------- 화면 ----------------
+const badge = {gemini:'G', claude:'C', system:'·', user:'나'};
+let openMap = {}, sig = '';
+function render(){
+  renderStatus();
+  // 배너
+  if(!job){ $('#banner').innerHTML = ''; $('#timeline').hidden = false; $('#deployBox').innerHTML = ''; updateComposer(); return; }
+  const cls = {brief:'run', dispatch:'run', wait:'run', review:'run', ask:'ask', done:'ok', merged:'ok', err:'err', ok:'ok'}[job.phase] || 'run';
+  const msg = job.message || ({brief:'Gemini가 지시서를 쓰는 중…', dispatch:'Claude에게 보내는 중…', wait:'Claude Code 작업 중…', review:'Gemini가 검토하는 중…'}[job.phase] || '');
+  const links = [job.prUrl ? `<a href="${esc(job.prUrl)}" target="_blank" rel="noopener">GitHub PR</a>` : '',
+    job.preview ? `<a href="${esc(job.preview)}" target="_blank" rel="noopener">미리보기 열기</a>` : '',
+    '<a href="https://claude.ai/code" target="_blank" rel="noopener">Claude 작업 보기</a>'].filter(Boolean).join('');
+  $('#banner').innerHTML = `<div class="banner ${cls}"><div class="m">${esc(msg)}</div><div class="hint">요청 · ${esc(job.request)}${job.chat ? ' (Gemini 대화 연결)' : ''}</div><div class="links">${links}</div></div>`;
+  const s = JSON.stringify(job.steps);
+  if(s !== sig){
+    sig = s;
+    $('#timeline').innerHTML = job.steps.map((st, i) => {
+      const open = openMap[i] !== undefined ? openMap[i] : (st.kind !== 'system' || st.status === 'err');
+      const stat = st.status === 'run' ? `<span class="st"><span class="spin"></span><span class="tm" data-s="${st.start}"></span></span>`
+        : st.status === 'info' ? '' : `<span class="st ${st.status}">${st.status === 'ok' ? '완료' : '실패'}${st.end ? ' · ' + fmtDur(st.end - st.start) : ''}</span>`;
+      return `<details class="step k-${st.kind}" data-i="${i}" ${open && st.body ? 'open' : ''}><summary><span class="badge">${badge[st.kind]||'·'}</span><span class="ttl">${esc(st.title)}</span>${stat}</summary>${st.body ? `<pre class="body">${esc(st.body)}</pre>` : ''}</details>`;
+    }).join('');
+  }
+  // 반영 버튼
+  if(job.phase === 'done' && job.pr){
+    if(!$('#deployBox').dataset.on){
+      $('#deployBox').dataset.on = '1';
+      $('#deployBox').innerHTML = `<div class="panel"><div class="row"><button id="pvBtn">미리보기 찾기</button><button class="primary" id="mergeBtn">공개 사이트에 반영</button></div><div id="mergeConfirm"></div><div class="hint" style="margin-top:6px">미리보기에서 확인한 뒤 반영하세요. 반영하면 main에 합쳐지고 Vercel이 공개 사이트를 바꿔요.</div></div>`;
+      $('#pvBtn').onclick = async () => { $('#pvBtn').disabled = true; await findPreview(); $('#pvBtn').disabled = false; if(!job.preview) $('#pvBtn').textContent = '아직 미리보기 없음 · 다시 찾기'; };
+      $('#mergeBtn').onclick = () => {
+        $('#mergeConfirm').innerHTML = `<div class="confirm"><b>정말 공개 사이트에 반영할까요?</b><div class="hint">모든 방문자에게 바로 보여요.</div><div class="row" style="margin-top:8px"><button class="primary" id="mergeYes">반영</button><button id="mergeNo">취소</button></div></div>`;
+        $('#mergeYes').onclick = () => { $('#mergeConfirm').innerHTML = ''; deployPR(); };
+        $('#mergeNo').onclick = () => { $('#mergeConfirm').innerHTML = ''; };
+      };
+    }
+  } else { $('#deployBox').dataset.on = ''; $('#deployBox').innerHTML = ''; }
+  updateComposer();
+  tick();
+}
+function tick(){ const now = Date.now(); document.querySelectorAll('.tm').forEach(el => el.textContent = fmtDur(now - (+el.dataset.s))); }
+document.addEventListener('toggle', e => { const d = e.target; if(d.matches && d.matches('details.step')) openMap[d.dataset.i] = d.open; }, true);
+
+function renderStatus(){
+  const ok = (v, n) => `<span class="chip ${v ? 'ok' : 'bad'}">${n}</span>`;
+  $('#status').innerHTML = ok(!!cfg.gemKey, 'Gemini') + ok(!!cfg.ghToken, 'GitHub');
+}
+
+function renderChat(){
+  const el = $('#chat');
+  if(!chat.length){ el.innerHTML = `<div class="empty">작업 전에 Gemini와 먼저 상의해 보세요. 사진·캡처·PDF·영상도 📎로 첨부할 수 있어요.<br>정리되면 <b>이 대화로 작업하기</b>를 누르면 돼요.</div>`; }
+  else el.innerHTML = chat.map((m, i) => {
+    const fl = (chatFiles[i] || []);
+    const filesHTML = (m.files && m.files.length) ? '<div class="files">' + m.files.map((f, k) => {
+      const live = fl[k];
+      return live && live.url && /^image\//.test(f.mime) ? `<img class="thumb" src="${live.url}" alt="${esc(f.name)}">` : `<span class="att"><span class="ico">${/^video/.test(f.mime) ? '영상' : (f.name.split('.').pop()||'파일').slice(0,4).toUpperCase()}</span><span class="nm">${esc(f.name)}</span></span>`;
+    }).join('') + '</div>' : '';
+    if(m.role === 'user') return `<div class="bubble user">${filesHTML}${esc(m.text)}</div>`;
+    if(m.role === 'model') return `<div class="bubble model"><div class="who">Gemini</div>${esc(m.text)}</div>`;
+    return `<div class="bubble error">${esc(m.text)}</div>`;
+  }).join('') + (busyChat ? `<div class="bubble model"><span class="spin" style="display:inline-block"></span> 생각하는 중…</div>` : '');
+  if(tab === 'chat'){ seen = chat.length; window.scrollTo(0, document.body.scrollHeight); }
+  $('#chatDot').hidden = tab === 'chat' || chat.length <= seen;
+}
+
+function updateComposer(){
+  const inp = $('#input'), send = $('#sendBtn');
+  $('#composer').hidden = tab === 'set';
+  $('#chatTools').hidden = tab !== 'chat' || !chat.some(m => m.role === 'model');
+  const n = chat.filter(m => m.role !== 'error').length;
+  if(useChat && !n) useChat = false;
+  $('#linked').hidden = !(tab === 'work' && useChat);
+  $('#linkedTxt').textContent = `Gemini 대화 연결됨 · 메시지 ${n}개`;
+  if(tab === 'chat'){ inp.placeholder = 'Gemini에게 물어보기'; send.textContent = '보내기'; send.disabled = busyChat; }
+  else if(job && job.phase === 'ask'){ inp.placeholder = 'Claude의 질문에 답하기'; send.textContent = '답하기'; send.disabled = false; }
+  else if(job && ['brief','dispatch','wait','review'].includes(job.phase)){ inp.placeholder = '작업이 끝나면 새로 보낼 수 있어요'; send.textContent = '보내기'; send.disabled = true; }
+  else { inp.placeholder = useChat ? '추가로 할 말 (비워두면 대화대로 진행)' : '할 일을 적어주세요'; send.textContent = '작업 시작'; send.disabled = false; }
+  $('#attachBtn').hidden = tab === 'work' && job && job.phase === 'ask';
+}
+
+function setTab(t){
+  tab = t;
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  $('#v-work').hidden = t !== 'work'; $('#v-chat').hidden = t !== 'chat'; $('#v-set').hidden = t !== 'set';
+  $('#inputMsg').textContent = '';
+  renderChat(); render();
+}
+document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
+
+// ---------------- 첨부 ----------------
+function renderPending(){
+  $('#pending').innerHTML = pending.map((f, i) => `<span class="att">${f.url && /^image\//.test(f.mime) ? `<img src="${f.url}" alt="">` : `<span class="ico">${/^video/.test(f.mime) ? '영상' : 'FILE'}</span>`}<span class="nm">${esc(f.name)}</span><button data-rm="${i}" aria-label="빼기">✕</button></span>`).join('');
+}
+async function addFiles(list){
+  for(const f of [...list]){
+    const total = pending.reduce((a, x) => a + x.size, 0) + f.size;
+    if(total > 15 * 1024 * 1024){ $('#inputMsg').textContent = '첨부는 한 번에 15MB까지예요. 영상은 짧게 잘라서 올려주세요.'; break; }
+    const data = await fileToB64(f);
+    pending.push({name: f.name || 'image.png', mime: f.type || 'application/octet-stream', size: f.size, data, url: /^image\//.test(f.type) ? URL.createObjectURL(f) : ''});
+  }
+  renderPending();
+}
+$('#attachBtn').onclick = () => $('#fileIn').click();
+$('#fileIn').onchange = e => { const fl = [...e.target.files]; e.target.value = ''; addFiles(fl); };
+$('#pending').onclick = e => { const b = e.target.closest('button[data-rm]'); if(b){ pending.splice(+b.dataset.rm, 1); renderPending(); } };
+$('#input').addEventListener('paste', e => { const fs = [...((e.clipboardData && e.clipboardData.files) || [])]; if(fs.length){ e.preventDefault(); addFiles(fs); } });
+
+// ---------------- 보내기 ----------------
+async function askGemini(text){
+  const files = pending.slice(); pending = []; renderPending();
+  const idx = chat.length;
+  chat.push({role:'user', text: text || '첨부한 파일을 봐줘.', files: files.map(f => ({name:f.name, mime:f.mime, size:f.size}))});
+  chatFiles[idx] = files;
+  store.set('chat', chat); busyChat = true; renderChat(); updateComposer();
+  try{
+    const contents = chat.map((m, i) => m.role === 'error' ? null : ({role: m.role === 'user' ? 'user' : 'model', parts:[{text:m.text}, ...(m.role === 'user' ? fileParts(chatFiles[i]) : [])]})).filter(Boolean);
+    const ans = await gemini(P_CHAT, contents);
+    chat.push({role:'model', text: ans});
+  }catch(e){ chat.push({role:'error', text: e.message}); }
+  busyChat = false; store.set('chat', chat); renderChat(); updateComposer();
+}
+
+$('#sendBtn').onclick = async () => {
+  const text = $('#input').value.trim();
+  $('#inputMsg').textContent = '';
+  try{
+    if(tab === 'chat'){
+      if(!text && !pending.length) return;
+      if(!cfg.gemKey) throw new Error('설정 탭에서 Gemini API 키를 먼저 넣어주세요.');
+      $('#input').value = ''; await askGemini(text); return;
+    }
+    if(job && job.phase === 'ask'){ if(!text) return; $('#input').value = ''; sendReply(text); return; }
+    if(!text && !useChat && !pending.length) return;
+    $('#input').value = '';
+    sig = ''; openMap = {};
+    await startJob(text, useChat);
+    pending = []; renderPending();
+  }catch(e){ $('#inputMsg').textContent = e.message; }
+};
+$('#input').addEventListener('input', e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(160, e.target.scrollHeight) + 'px'; });
+$('#toWork').onclick = () => { useChat = true; setTab('work'); $('#input').focus(); };
+$('#unlink').onclick = () => { useChat = false; updateComposer(); };
+
+// ---------------- 설정 ----------------
+function loadSet(){ $('#sGem').value = cfg.gemKey; $('#sModel').value = cfg.model; $('#sGh').value = cfg.ghToken; $('#sRepo').value = cfg.repo; $('#sRounds').value = cfg.rounds; $('#sWait').value = cfg.waitMin; }
+$('#saveSet').onclick = () => {
+  cfg = {gemKey: $('#sGem').value.trim(), model: $('#sModel').value.trim() || 'gemini-flash-latest', ghToken: $('#sGh').value.trim(),
+    repo: $('#sRepo').value.trim().replace(/^https?:\/\/github\.com\//,'').replace(/\.git$/,'') || 'Gwangeo-pr/gwangeo-app',
+    rounds: Math.max(0, Math.min(3, +$('#sRounds').value || 0)), waitMin: Math.max(5, Math.min(120, +$('#sWait').value || 40))};
+  store.set('cfg', cfg); $('#setMsg').textContent = '저장했어요.'; renderStatus();
+};
+$('#testSet').onclick = async () => {
+  $('#setMsg').textContent = '확인하는 중…';
+  const out = [];
+  try{ const r = await gh(R()); out.push('GitHub: ' + r.full_name + (r.permissions && r.permissions.push ? ' · 쓰기 가능' : ' · 쓰기 권한 없음')); }catch(e){ out.push(e.message); }
+  try{ await gemini('Reply with OK.', [{role:'user', parts:[{text:'ping'}]}]); out.push('Gemini: 연결됨'); }catch(e){ out.push(e.message); }
+  $('#setMsg').textContent = out.join(' / ');
+};
+$('#routinePrompt').textContent = ROUTINE_PROMPT;
+$('#copyRoutine').onclick = async () => {
+  try{ await navigator.clipboard.writeText(ROUTINE_PROMPT); $('#copyMsg').textContent = '복사했어요'; }
+  catch(e){ const r = document.createRange(); r.selectNodeContents($('#routinePrompt')); const s = getSelection(); s.removeAllRanges(); s.addRange(r); $('#copyMsg').textContent = '선택됐어요. 복사를 눌러주세요'; }
+};
+$('#resetJob').onclick = () => { if(running) return; job = null; store.set('job', null); sig = ''; render(); setTab('work'); };
+$('#resetChat').onclick = () => { chat = []; chatFiles = {}; seen = 0; useChat = false; store.set('chat', chat); renderChat(); };
+
+// ---------------- 시작 ----------------
+loadSet(); renderChat(); render();
+setInterval(tick, 1000);
+// 아이폰이 탭을 닫았다 다시 열어도 이어서 진행
+if(job && ['brief','dispatch','wait','review'].includes(job.phase)) drive([]).catch(fatal);
+document.addEventListener('visibilitychange', () => { if(!document.hidden && job && ['wait','review','dispatch'].includes(job.phase) && !running) drive([]).catch(fatal); });
+</script>
+</body>
+</html>
